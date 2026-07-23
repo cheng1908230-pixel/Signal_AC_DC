@@ -1,0 +1,31 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "STM32 OpenOCD Debug",             // 调试配置的名称，显示在 VS Code 左侧菜单
+            "type": "cortex-debug",                    // 核心插件：指定使用 Cortex-Debug 插件
+            "request": "launch",                       // 请求类型：launch（启动调试）或 attach（附加到已有进程）
+            "cwd": "${workspaceFolder}",               // 当前工作目录：项目根目录
+            
+            // 1. 告诉 VS Code 编译出来的可执行文件在哪（改成你自己的 .elf 文件名）
+            "executable": "${workspaceFolder}/build/Debug/current.elf", 
+            
+            // 2. 指定调试服务器类型
+            "servertype": "openocd",                   
+            
+            // 3. 核心配置：指定硬件接口和目标芯片的配置文件（根据你的硬件修改）
+            "configFiles": [
+                "interface/stlink.cfg",                // 调试器驱动：这里用的是 ST-LINK
+                "target/stm32g4x.cfg"                  // 芯片配置文件：如果是 F4 改成 stm32f4x.cfg,根据实际情况来改
+            ],
+            
+            // 4. 调试初始化行为
+            "runToEntryPoint": "main",                 // 烧录成功后，程序自动运行并暂停在 main 函数第一行
+            
+            // 5. 终极避坑防锁死配置
+            "connectUnderReset": true,                 // 允许在复位状态下连接（解决 Error 138 无法连接的神经刀问题）
+            "showDevDebugOutput": "none"               // 关闭冗余的底层调试日志，让控制台保持干净
+        }
+    ]
+}
+
