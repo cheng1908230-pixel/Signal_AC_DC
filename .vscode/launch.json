@@ -7,7 +7,7 @@
             "request": "launch",                       // 请求类型：launch（启动调试）或 attach（附加到已有进程）
             "cwd": "${workspaceFolder}",               // 当前工作目录：项目根目录
             
-            // 1. 告诉 VS Code 编译出来的可执行文件在哪（改成你自己的 .elf 文件名）
+            // 1. 告诉 VS Code 编译出来的可执行文件在哪（改成自己的 .elf 文件名）
             "executable": "${workspaceFolder}/build/Debug/current.elf", 
             
             // 2. 指定调试服务器类型

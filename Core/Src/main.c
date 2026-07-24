@@ -29,6 +29,7 @@
 #include "SOGI.h"
 #include "arm_math.h"
 #include "stdio.h"
+#include "pfc_spwm.h"
 
 /* USER CODE END Includes */
 
@@ -63,6 +64,8 @@ SinglePhasePLL_t PLL_rectify = {
     .voltage_min = 0.5f,                /* 最小电压阈值，V */
 };
 
+PFC_PWM_t pfc_spwm; // PFC_PWM实例结构体
+
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
@@ -96,6 +99,11 @@ static uint32_t tx_divider = 0U;//串口发送计时
 volatile uint32_t tog = 0u;
 */
 
+/*用作逆变spwm的测试变量*/
+float theta_spwm_step = 2*PI*50.0f*0.00002f; 
+float theta_spwm = 0.0f;
+uint8_t spwm_start = 0u;
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -118,7 +126,6 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
-
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
@@ -144,12 +151,29 @@ int main(void)
   MX_TIM6_Init();
   MX_USART1_UART_Init();
   MX_TIM16_Init();
+  MX_TIM8_Init();
   /* USER CODE BEGIN 2 */
 
   //adc启动
   HAL_ADCEx_Calibration_Start(&hadc1, ADC_SINGLE_ENDED); // ADC1校准
   HAL_ADC_Start_DMA(&hadc1, (uint32_t*)adc_buffer, 2);// 软件启动从ADC1
   HAL_TIM_Base_Start(&htim6);//开启tim6（adc时钟, 50k采集电压,并且锁相）
+
+  //spwm启动,并没有做启动检测，后续可以考虑
+  HAL_TIM_PWM_Start(&htim8, TIM_CHANNEL_1);
+  HAL_TIM_PWM_Start(&htim8, TIM_CHANNEL_2);
+  HAL_TIMEx_PWMN_Start(&htim8, TIM_CHANNEL_1);
+  HAL_TIMEx_PWMN_Start(&htim8, TIM_CHANNEL_2);
+
+  //pfc_spwm初始化
+  PFC_PWM_Init(&pfc_spwm,
+                  &htim8,
+                  TIM_CHANNEL_1,
+                  TIM_CHANNEL_2,
+                  0.02f, 0.98f,
+                  1.0f, 50.0f,
+                  -0.96f, 0.96f);
+
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -159,7 +183,7 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-    #if 0/*----------主函数注释的开始----------*/
+    #if 0/*----------主函数注释锁相环的开始----------*/
     float omega;
     float omega2;
     
@@ -210,7 +234,7 @@ int main(void)
                (unsigned long)omega_decimal);
 
       }
-    #endif/*----------主函数注释的结束----------*/
+    #endif/*----------主函数注释锁相环的结束----------*/
   }
   /* USER CODE END 3 */
 }
@@ -340,6 +364,19 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc)
       if(theta > 2*PI)
       {
          theta -= 2.0f * PI;
+      }
+
+      theta_spwm += theta_spwm_step;
+      if(theta_spwm > 2*PI)
+      {
+         theta_spwm -= 2.0f * PI;
+      }
+      float v_ref = 1.0f * arm_sin_f32(theta_spwm);
+      spwm_start++;
+      if(spwm_start > 5u)
+      {
+        PFC_PWM_Update(&pfc_spwm, v_ref, 2); 
+        spwm_start = 0u;
       }
 
       /*
