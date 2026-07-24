@@ -48,6 +48,8 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user sources here
     ${CMAKE_CURRENT_SOURCE_DIR}/SOGI/SOGI.c
     ${CMAKE_CURRENT_SOURCE_DIR}/pfc_spwm/pfc_spwm.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/control/qpr.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/control/pid.c
 )
 
 # Add include paths
@@ -55,6 +57,7 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user defined include paths
     ${CMAKE_SOURCE_DIR}/SOGI
     ${CMAKE_SOURCE_DIR}/pfc_spwm
+    ${CMAKE_SOURCE_DIR}/control
 )
 
 # Add project symbols (macros)

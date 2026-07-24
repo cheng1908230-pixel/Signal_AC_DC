@@ -28,6 +28,53 @@
 #include "SOGI.h"
 
 /**
+ * @brief  双线性锁相环初始化函数
+ */
+void SinglePhasePLL_Init(SinglePhasePLL_t *pll,
+                           float Ts,
+                           float theta,
+                           float omega,
+                           float omega_nominal,
+                           float omega_min,
+                           float omega_max,
+                           float integrator_max,
+                           float integrator_min,
+                           float sogi_k,
+                           float alpha,
+                           float beta,
+                           float vin_last,
+                           float kp,
+                           float ki,
+                           float integrator,
+                           float amplitude,
+                           float vq,
+                           float vq_normalized,
+                           float voltage_min,
+                           bool voltage_valid)
+{
+    pll->Ts = Ts;
+    pll->theta = theta;
+    pll->omega = omega;
+    pll->omega_nominal = omega_nominal;
+    pll->omega_min = omega_min;
+    pll->omega_max = omega_max;
+    pll->integrator_max = integrator_max;
+    pll->integrator_min = integrator_min;
+    pll->sogi_k = sogi_k;
+    pll->alpha = alpha;
+    pll->beta = beta;
+    pll->vin_last = vin_last;
+    pll->kp = kp;
+    pll->ki = ki;
+    pll->integrator = integrator;
+    pll->amplitude = amplitude;
+    pll->vq = vq;
+    pll->vq_normalized = vq_normalized;
+    pll->voltage_min = voltage_min;
+    pll->voltage_valid = voltage_valid;
+}
+
+/**
  * @brief  双线性锁相环更新计算，得出alpha、beta的最新值，以及将本次电压作为历史积分值
  *
  * @param  pll          指向 PLL 实例结构体的指针

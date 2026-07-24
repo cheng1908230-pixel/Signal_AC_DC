@@ -30,12 +30,15 @@
 #include "arm_math.h"
 #include "stdio.h"
 #include "pfc_spwm.h"
+#include "qpr.h"
+#include "pid.h"
 
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
 /*私有类型定义*/
+//锁相环内部用了归一化，无需在意外部电压幅值
 //单相整流锁相环结构体
 SinglePhasePLL_t PLL_rectify = {
     .theta = 0.0f,         /* 锁相角，rad */
@@ -65,6 +68,37 @@ SinglePhasePLL_t PLL_rectify = {
 };
 
 PFC_PWM_t pfc_spwm; // PFC_PWM实例结构体
+
+//QPR控制器实例结构体
+QPRController qpr_controller={
+
+    //实际需要修改的参数
+    .Kp = 0.1f,          // 比例增益
+    .Kr = 0.5f,          // 谐振增益
+    .omega_c = 2.0f * PI * 100.0f, // 截止角频率
+    .omega_0 = 2.0f * PI * 50.0f,  // 谐振角频率
+    .T = 0.00002f,       // 采样周期
+
+    .output_max = 1.0f,  // 输出上限
+    .output_min = -1.0f, // 输出下限
+
+    //无须修改的参数
+    .u_prev1 = 0.0f,
+    .u_prev2 = 0.0f,
+    .y_prev1 = 0.0f,
+    .y_prev2 = 0.0f,
+
+    .b0 = 0.0f,
+    .b1 = 0.0f,
+    .b2 = 0.0f,
+    .a1 = 0.0f,
+    .a2 = 0.0f,
+
+    .output = 0.0f
+};
+
+//PID控制器实例结构体
+PID_Controller pid_controller; // PID 控制器实例结构体
 
 /* USER CODE END PTD */
 
@@ -99,10 +133,12 @@ static uint32_t tx_divider = 0U;//串口发送计时
 volatile uint32_t tog = 0u;
 */
 
-/*用作逆变spwm的测试变量*/
+/*用作单相逆变spwm的测试变量*/
+/*
 float theta_spwm_step = 2*PI*50.0f*0.00002f; 
 float theta_spwm = 0.0f;
 uint8_t spwm_start = 0u;
+*/
 
 /* USER CODE END PV */
 
@@ -126,6 +162,8 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
+  QPRController_Init(&qpr_controller); // 初始化 QPR 控制器
+  PID_Init(&pid_controller, 1.0f, 0.1f, 0.01f, 10.0f, 1.0f, -1.0f);
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
@@ -166,6 +204,7 @@ int main(void)
   HAL_TIMEx_PWMN_Start(&htim8, TIM_CHANNEL_2);
 
   //pfc_spwm初始化
+  //输入的参数均需要修改
   PFC_PWM_Init(&pfc_spwm,
                   &htim8,
                   TIM_CHANNEL_1,
@@ -365,20 +404,6 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc)
       {
          theta -= 2.0f * PI;
       }
-
-      theta_spwm += theta_spwm_step;
-      if(theta_spwm > 2*PI)
-      {
-         theta_spwm -= 2.0f * PI;
-      }
-      float v_ref = 1.0f * arm_sin_f32(theta_spwm);
-      spwm_start++;
-      if(spwm_start > 5u)
-      {
-        PFC_PWM_Update(&pfc_spwm, v_ref, 2); 
-        spwm_start = 0u;
-      }
-
       /*
       //测量实际相位差
       if(theta >= -2e-2 && theta <= 2e-2 && tog == 0u)
@@ -391,6 +416,22 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc)
         tog = 0u;
       }
       */
+
+      /*单相逆变测试代码*/
+      /*
+      theta_spwm += theta_spwm_step;
+      if(theta_spwm > 2*PI)
+      {
+         theta_spwm -= 2.0f * PI;
+      }
+      float v_ref = 1.0f * arm_sin_f32(theta_spwm);
+      spwm_start++;
+      if(spwm_start > 5u)
+      {
+        PFC_PWM_Update(&pfc_spwm, v_ref, 2); 
+        spwm_start = 0u;
+      }
+     */
   }
 }
 

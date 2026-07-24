@@ -6,7 +6,7 @@
 #include "arm_math.h"
 
  /**
-  * @brief 双线性离散变换锁相环的结构体变量、
+  * @brief 双线性离散变换锁相环的结构体变量
   * 
   * @note Ts、omega_nominal、omega_min、omega_max、integrator_max、integrator_min、
   *       kp、ki、sogi_k、voltage_min、omega等参数需要根据实际应用进行配置。
@@ -44,6 +44,29 @@ typedef struct
     bool voltage_valid;
 } SinglePhasePLL_t;
 
+
+
+void SinglePhasePLL_Init(SinglePhasePLL_t *pll,
+                           float Ts,
+                           float theta,
+                           float omega,
+                           float omega_nominal,
+                           float omega_min,
+                           float omega_max,
+                           float integrator_max,
+                           float integrator_min,
+                           float sogi_k,
+                           float alpha,
+                           float beta,
+                           float vin_last,
+                           float kp,
+                           float ki,
+                           float integrator,
+                           float amplitude,
+                           float vq,
+                           float vq_normalized,
+                           float voltage_min,
+                           bool voltage_valid);
 void SinglePhasePLL_Update(SinglePhasePLL_t *pll,
                            float grid_voltage);
 
