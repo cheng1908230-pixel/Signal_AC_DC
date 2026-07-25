@@ -15,6 +15,7 @@
  */
 
  #include "pfc_spwm.h"
+#include "stm32g4xx_hal_tim.h"
 
   /**
  * @brief  SPWM初始化函数
@@ -159,6 +160,8 @@ void PFC_PWM_SetZeroVoltage(PFC_PWM_t *pwm)
  * @param  pwm          指向 PFC_PWM 实例结构体的指针
  * @param  v_conv_ref   输入的交流参考电压，单位：V
  * @param  vdc          预计输出的直流母线电压，单位为：V
+ * 
+ * @return 返回bool类型，true表示更新成功，false表示更新失败
  *
  * @warning 供外部调用使用
  */
@@ -234,5 +237,47 @@ bool PFC_PWM_Update(PFC_PWM_t *pwm,float v_conv_ref,float vdc)
 
     __HAL_TIM_SET_COMPARE(pwm->htim,pwm->channel_v,compare_v);
 
+    return true;
+}
+
+/**
+ * @brief  SPWM波形启动函数
+ * 
+ * @return 返回bool类型，true表示启动成功，false表示启动失败
+ *
+ * @note 主要作用是使整个mos管正常导通
+ */
+bool PFC_SPWM_Start(PFC_PWM_t *pwm)
+{
+    if ((pwm == NULL) || (pwm->htim == NULL))
+    {
+        return false;
+    }
+
+    if(HAL_TIM_PWM_Start(pwm->htim, pwm->channel_u)!=HAL_OK)
+    {
+        return false;
+    }
+
+    if(HAL_TIMEx_PWMN_Start(pwm->htim, pwm->channel_u)!=HAL_OK)
+    {
+        HAL_TIM_PWM_Stop(pwm->htim, pwm->channel_u);
+        return false;
+    }
+
+    if(HAL_TIM_PWM_Start(pwm->htim, pwm->channel_v)!=HAL_OK)
+    {
+        HAL_TIMEx_PWMN_Stop(pwm->htim, pwm->channel_u);
+        HAL_TIM_PWM_Stop(pwm->htim, pwm->channel_u);
+        return false;
+    }
+
+    if(HAL_TIMEx_PWMN_Start(pwm->htim, pwm->channel_v)!=HAL_OK)
+    {
+        HAL_TIM_PWM_Stop(pwm->htim, pwm->channel_v);
+        HAL_TIMEx_PWMN_Stop(pwm->htim, pwm->channel_u);
+        HAL_TIM_PWM_Stop(pwm->htim, pwm->channel_u);
+        return false;
+    }
     return true;
 }

@@ -34,5 +34,6 @@ void PFC_PWM_Init(PFC_PWM_t *pwm,
                   float modulation_min,float modulation_max);
 void PFC_PWM_SetZeroVoltage(PFC_PWM_t *pwm);
 bool PFC_PWM_Update(PFC_PWM_t *pwm,float v_conv_ref,float vdc);
+bool PFC_SPWM_Start(PFC_PWM_t *pwm);
 
 #endif
