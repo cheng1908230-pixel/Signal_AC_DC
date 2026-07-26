@@ -33,7 +33,7 @@
 #include "qpr.h"
 #include "pid.h"
 #include <stdbool.h>//使用bool类型变量
-/*百分百关断，执行频率，角度补偿，软启动，反馈符号，锁相角度，电网电压前馈，所有参数,陷波器，无效状态关闭spwm*/
+/*百分百关断，软启动，电网电压前馈，所有参数，无效状态关闭spwm*/
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -74,15 +74,15 @@ PFC_PWM_t pfc_spwm; // PFC_PWM实例结构体
 QPRController qpr_controller={
 
     //实际需要修改的参数
-    .Kp = 0.6f,          // 比例增益
-    .Kr = 0.1f,          // 谐振增益
+    .Kp = 0.2f,          // 比例增益
+    .Kr = 0.7f,          // 谐振增益
     .omega_c = 2.0f * PI * 5.0f,   // 谐振角频率
     .omega_0 = 2.0f * PI * 50.0f,  // 电网基波角频率
 
     .T = 0.00005f,       // 内环采样周期,20k
 
-    .output_max = 0.1f,  // 输出上限
-    .output_min = -0.1f, // 输出下限
+    .output_max = 2.5f,  // 输出上限
+    .output_min = -2.5f, // 输出下限
 
     //无须修改的参数
     .u_prev1 = 0.0f,
@@ -111,7 +111,7 @@ PID_Controller pid_controller; // PID 控制器实例结构体
 #define ADC_V_SCALE_DC (3.3f / (4095.0f / 20.0f))//电压系数
 #define ADC_I_SCALE (3.3f / ((4095.0f) * 7.5f))//电流系数
 #define ADC_FILTER_LENGTH 5U//五点滑动滤波
-#define voltage_reference 3.0f //直流电压参考值
+#define voltage_reference 2.8f //直流电压参考值
 #define PF 1.0f  //功率因数    
 
 
@@ -153,6 +153,7 @@ volatile uint8_t PLL_stable = 0U;          //等待锁相环稳定再进行闭�
 volatile uint32_t spwm_update_count = 0u; // SPWM更新计数，现改为20k
 volatile uint32_t PI_outdoor_f = 0u;//PI外环执行频率，达到10更行一次，即以5k频率更新
 volatile uint32_t PI_outdoor_time = 0u; //  PI外环的次数
+volatile float Pll_angle_step = 0.0f; // 锁相环PFC角度步进
 
 /* USER CODE END PV */
 
@@ -176,8 +177,13 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
+  //锁相环前行计算
+  float x = PF;
+  x = fmaxf(0.0f, fminf(1.0f, x));          /* 功率因数限制至0-1 */
+  Pll_angle_step = acosf(x);                /*最终的值会归一到0到PI*/
+
   QPRController_Init(&qpr_controller); // 初始化 QPR 控制器
-  PID_Init(&pid_controller, 0.05f, 0.0002f, 0.00f, 0.20f, 0.20f, 0.0f);
+  PID_Init(&pid_controller,  0.05f, 0.00005f, 0.00f, 0.15f, 0.15f, 0.0f);
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
@@ -207,7 +213,7 @@ int main(void)
   MX_ADC2_Init();
   /* USER CODE BEGIN 2 */
 
-  //adc启动，由TIM8的TRGO事件触发，50k，包括锁相环
+  //adc启动，由TIM8的TRGO事件触发，20k，包括锁相环
   HAL_ADCEx_Calibration_Start(&hadc1, ADC_SINGLE_ENDED); // ADC1校准
   HAL_ADCEx_Calibration_Start(&hadc2, ADC_SINGLE_ENDED); // ADC2校准
   HAL_ADC_Start(&hadc2);// 软件启动从ADC2
@@ -296,7 +302,7 @@ int main(void)
         float omega;
 
         __disable_irq();//关中断
-        omega = PLL_rectify.omega / 2 / PI;
+        omega = adc_V_value[2];
         TX_ready = 0;// 清除串口发送标志位
         __enable_irq();//开中断
 
@@ -445,8 +451,8 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc)
       //锁相
       SinglePhasePLL_Update(&PLL_rectify, adc_V_value[1]);
 
-      /*补足相位滞后，以及相位滞后的过零点检测*/
-      float theta = PLL_rectify.theta + PI/2;
+      /*补足公式中的相位以及1.8度群延迟*/
+      float theta = PLL_rectify.theta + PI/2 + 0.0314f;
       if(theta > 2*PI)
       {
          theta -= 2.0f * PI;
@@ -511,7 +517,7 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc)
       if(PI_outdoor_time == 0U)
       {
         //第一步：电压环的PID控制
-        PID_Calc(&pid_controller, voltage_reference, adc_V_value[2]/20);
+        PID_Calc(&pid_controller, voltage_reference, adc_V_value[2]);
         PI_outdoor_time = 1u;
       }
 
@@ -519,13 +525,11 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc)
       {
         PI_outdoor_f = 0u;
       //第一步：电压环的PID控制
-        PID_Calc(&pid_controller, voltage_reference, adc_V_value[2]/20);
+        PID_Calc(&pid_controller, voltage_reference, adc_V_value[2]);
       }
 
       //第二步：并行进行角度控制，PFC矫正
-        float x = PF;
-        x = fmaxf(0.0f, fminf(1.0f, x));          /* 功率因数限制至0-1 */
-        float angle = acosf(x) + theta;           /*最终的值会归一到0到PI*/
+        float angle = Pll_angle_step + theta;        
         if(angle > 2*PI)
        {
          angle -= 2.0f * PI;
@@ -534,12 +538,15 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc)
         float I_target = arm_sin_f32(angle) * pid_controller.output;
       //第四步：差值进行QPR控制
         float I_error = I_target - adc_I_value[1];
-        float test_error = 0.1f * arm_sin_f32(angle);
-        QPRController_Update(&qpr_controller, test_error);
+        QPRController_Update(&qpr_controller, I_error);
       //第五步：根据PR控制器的输出更新SPWM
         float v_ref = qpr_controller.output;
-        if(PFC_PWM_Update(&pfc_spwm, v_ref, 0.1) != true)
-        {PFC_PWM_SetZeroVoltage(&pfc_spwm);};
+        if(PFC_PWM_Update(&pfc_spwm, v_ref, adc_V_value[2]) != true)
+        {if(PFC_SPWM_Stop(&pfc_spwm) != true)
+          {
+            Error_Handler();//硬件中断
+          }
+        };
      }
   }
 }

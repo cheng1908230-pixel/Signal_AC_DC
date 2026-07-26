@@ -281,3 +281,25 @@ bool PFC_SPWM_Start(PFC_PWM_t *pwm)
     }
     return true;
 }
+
+/**
+ * @brief  SPWM波形停止函数
+ * 
+ * @return 返回bool类型，true表示停止成功，false表示停止失败
+ *
+ * @note 主要作用是使整个mos管停止导通
+ */
+bool PFC_SPWM_Stop(PFC_PWM_t *pwm)
+{
+    if ((pwm == NULL) || (pwm->htim == NULL))
+    {
+        return false;
+    }
+
+    HAL_TIM_PWM_Stop(pwm->htim, pwm->channel_u);
+    HAL_TIMEx_PWMN_Stop(pwm->htim, pwm->channel_u);
+    HAL_TIM_PWM_Stop(pwm->htim, pwm->channel_v);
+    HAL_TIMEx_PWMN_Stop(pwm->htim, pwm->channel_v);
+
+    return true;
+}
