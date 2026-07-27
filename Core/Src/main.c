@@ -33,7 +33,8 @@
 #include "qpr.h"
 #include "pid.h"
 #include <stdbool.h>//使用bool类型变量
-/*百分百关断，软启动，电网电压前馈，所有参数，无效状态关闭spwm*/
+
+
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -69,6 +70,12 @@ SinglePhasePLL_t PLL_rectify = {
 };
 
 PFC_PWM_t pfc_spwm; // PFC_PWM实例结构体
+#define PFC_SPWM_duty_min 0.02f
+#define PFC_SPWM_duty_max 0.98f
+#define PFC_SPWM_Vdc_max 50.0f
+#define PFC_SPWM_Vdc_min 0.0f
+#define PFC_SPWM_modulation_min -0.96f
+#define PFC_SPWM_modulation_max 0.96f
 
 //QPR控制器实例结构体，内环
 QPRController qpr_controller={
@@ -101,19 +108,32 @@ QPRController qpr_controller={
 
 //PID控制器实例结构体
 PID_Controller pid_controller; // PID 控制器实例结构体
+#define PID_AC_DC_Kp 0.05f
+#define PID_AC_DC_Ki 0.00005f
+#define PID_AC_DC_Kd 0.0f
+#define PID_AC_DC_maxintegral 0.15f
+#define PID_AC_DC_maxoutput 0.15f
+#define PID_AC_DC_minooutput 0.0f
 
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 /*私有宏定义，常量*/
-#define ADC_V_SCALE (3.3f / (4095.0f * 0.0355f))//电压系数
-#define ADC_V_SCALE_DC (3.3f / (4095.0f / 20.0f))//电压系数
-#define ADC_I_SCALE (3.3f / ((4095.0f) * 7.5f))//电流系数
+#define ADC_V_SCALE (3.3f / (4095.0f * 0.0355f))//交流电压系数
+#define ADC_V_SCALE_DC (3.3f / (4095.0f / 20.0f))//直流电压系数
+#define ADC_I_SCALE (3.3f / ((4095.0f) * 7.5f))//交流电流系数
 #define ADC_FILTER_LENGTH 5U//五点滑动滤波
 #define voltage_reference 2.8f //直流电压参考值
-#define PF 1.0f  //功率因数    
 
+#define PF 1.0f  //功率因数    
+#define PF_MAX   1.0f //功率因数最大值
+#define PF_MIN   0.0f //功率因数最小值
+
+//锁相环理论上不应该输出的最大与最小相角，输出即为异常
+#define PLL_rectify_omega_max (2.0f * PI * 53.0f)
+#define PLL_rectify_omega_min (2.0f * PI * 47.0f)
+#define PLL_rectify_vq_normalized_min 0.01f//锁相环理论上vq不应持续低于某个值
 
 /* USER CODE END PD */
 
@@ -130,30 +150,35 @@ PID_Controller pid_controller; // PID 控制器实例结构体
 
 //ADC采集电压值
 volatile uint32_t adc_buffer[3]; // ADC数据缓存
+volatile uint8_t  adc_buffer_num = 3;
 volatile float adc_V_value[3]; // ADC转换后的电压值，第一个是偏移电压值，第二个是单相交流电压值，第三个直流母线电压
 volatile float adc_I_value[3]; // ADC转换后的电流值，第一个是偏移电流值，第二个是交流测电感电流值,第三个空电流采集
 
 /*仅仅调试与测量相位差时用*/
 volatile uint8_t TX_ready = 0; // 串口发送标志位
 volatile uint32_t tx_divider = 0U;//串口发送计时
-//电平反转用于测量实际相位延迟
 
+//电平反转用于测量实际相位延迟
 /*
 volatile uint32_t tog = 0u;
 */
 
 /*用作单相逆变spwm的测试变量*/
 /*
-float theta_spwm_step = 2*PI*50.0f*0.00002f; 
-float theta_spwm = 0.0f;
-uint8_t spwm_start = 0u;
+float theta_spwm_step = 2*PI*50.0f*0.00002f; //SPWM逆变步长 
+float theta_spwm = 0.0f;     // SPWM逆变角度
+uint8_t spwm_start = 0u;     //SPWM逆变调整时间
+float spwm_amplitude = 1.0f; // SPWM逆变测量幅值
 */
 
+/*不用自己调整的参数*/
 volatile uint8_t PLL_stable = 0U;          //等待锁相环稳定再进行闭环操作，锁相环稳定标志位
-volatile uint32_t spwm_update_count = 0u; // SPWM更新计数，现改为20k
-volatile uint32_t PI_outdoor_f = 0u;//PI外环执行频率，达到10更行一次，即以5k频率更新
-volatile uint32_t PI_outdoor_time = 0u; //  PI外环的次数
+volatile uint32_t PI_outdoor_f = 0u;//PI外环执行频率，达到20更行一次，即以1k频率更新
+volatile uint32_t PI_outdoor_time = 0u; //  判断PI外环是否为首次执行
 volatile float Pll_angle_step = 0.0f; // 锁相环PFC角度步进
+static uint16_t pll_lock_count = 0U;//判断锁相环是否锁定，正常电压时，计数达到4000更新一次，表示0.2s完成锁相
+static uint16_t pll_unlock_count = 0U;//判断锁相环是否异常，在异常状态计数达到400更新，表示0.02s锁相环失去稳定
+static bool pll_lock_condition = false;
 
 /* USER CODE END PV */
 
@@ -177,13 +202,16 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
-  //锁相环前行计算
+  /**
+  * @brief  前行计算与初始化
+  */
   float x = PF;
-  x = fmaxf(0.0f, fminf(1.0f, x));          /* 功率因数限制至0-1 */
-  Pll_angle_step = acosf(x);                /*最终的值会归一到0到PI*/
+  x = fmaxf(PF_MIN, fminf(PF_MAX, x));       /* 功率因数限制至PF_MAX,PF_MIN */
+  Pll_angle_step = acosf(x);                 /*最终的值会归一到0到PI*/
 
+  /* QPR与PID初始化*/
   QPRController_Init(&qpr_controller); // 初始化 QPR 控制器
-  PID_Init(&pid_controller,  0.05f, 0.00005f, 0.00f, 0.15f, 0.15f, 0.0f);
+  PID_Init(&pid_controller,  PID_AC_DC_Kp, PID_AC_DC_Ki, PID_AC_DC_Kd, PID_AC_DC_maxintegral, PID_AC_DC_maxoutput, PID_AC_DC_minooutput);
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
@@ -213,23 +241,25 @@ int main(void)
   MX_ADC2_Init();
   /* USER CODE BEGIN 2 */
 
-  //adc启动，由TIM8的TRGO事件触发，20k，包括锁相环
+  /**
+  * @brief  相关外设初始化
+  */
+  /* adc启动，由TIM8的TRGO事件触发，20k，包括锁相环 */
   HAL_ADCEx_Calibration_Start(&hadc1, ADC_SINGLE_ENDED); // ADC1校准
   HAL_ADCEx_Calibration_Start(&hadc2, ADC_SINGLE_ENDED); // ADC2校准
   HAL_ADC_Start(&hadc2);// 软件启动从ADC2
-  HAL_ADCEx_MultiModeStart_DMA(&hadc1, (uint32_t*)adc_buffer, 3);// 多模式DMA启动，启动主ADC1
+  HAL_ADCEx_MultiModeStart_DMA(&hadc1, (uint32_t*)adc_buffer, adc_buffer_num);// 多模式DMA启动，启动主ADC1
 
-  /* spwm启动,并没有做启动检测，后续可以考虑 */
-  //pfc_spwm初始化
-  //输入的参数均需要修改
+
+  /* spwm启动，需要手动更改通道与时钟*/
   PFC_PWM_Init(&pfc_spwm,
                   &htim8,
                   TIM_CHANNEL_1,
                   TIM_CHANNEL_2,
-                  0.02f, 0.98f,
-                  0.000f, 50.0f,
-                  -0.96f, 0.96f);
-  
+                  PFC_SPWM_duty_min, PFC_SPWM_duty_max,
+                  PFC_SPWM_Vdc_min, PFC_SPWM_Vdc_max,
+                  PFC_SPWM_modulation_min, PFC_SPWM_modulation_max);
+
   if(!PFC_SPWM_Start(&pfc_spwm))
   {
      Error_Handler(); // 调用错误处理函数
@@ -244,7 +274,7 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-    #if 0/*----------主函数注释锁相环的开始----------*/
+    #if 0/*----------主函数锁相环检测串口调试的开始，更改变量既可以看----------*/
     float omega;
     float omega2;
     
@@ -295,8 +325,9 @@ int main(void)
                (unsigned long)omega_decimal);
 
       }
-    #endif/*----------主函数注释锁相环的结束----------*/
+    #endif/*----------主函数锁相环检测串口调试的结束----------*/
 
+    /*主函数串口调试观测直流侧电压*/
     if(TX_ready == 1)
     {   
         float omega;
@@ -315,8 +346,10 @@ int main(void)
         printf("%c%lu.%04lu\r\n",
                (omega < 0.0f) ? '-' : '+',
                (unsigned long)omega_integer,
-               (unsigned long)omega_decimal);}
+               (unsigned long)omega_decimal);
+    }
   }
+
   /* USER CODE END 3 */
 }
 
@@ -383,6 +416,12 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc)
   //注意打开dma的循环模式，单次转换也需要开启循环模式
  if (hadc->Instance == ADC1)
   {
+  /*端口反转，用于测量是否阻塞中断（采用PA0端口）*/
+  //HAL_GPIO_TogglePin(GPIOA,GPIO_PIN_0);
+  
+  /**
+  * @brief  第一部分：电压转换函数，并采用滑动滤波，采用五点滤波
+  */
     //储存单相电压
     const uint32_t adc_sample0 = adc_buffer[0];
     const uint32_t adc_sample1 = adc_buffer[1];
@@ -448,20 +487,13 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc)
         filter_index = 0U;
       }
 
+  /**
+  * @brief  第二部分：锁相环开始，并判断锁相是否稳定
+  */
       //锁相
       SinglePhasePLL_Update(&PLL_rectify, adc_V_value[1]);
 
-      /*补足公式中的相位以及1.8度群延迟*/
-      float theta = PLL_rectify.theta + PI/2 + 0.0314f;
-      if(theta > 2*PI)
-      {
-         theta -= 2.0f * PI;
-      }
-
-      /*端口反转，用于测量是否阻塞端口*/
-      //HAL_GPIO_TogglePin(GPIOA,GPIO_PIN_0);
-      
-      //测量实际相位差
+      //测量实际相位差，方法通过过零点进行检测
       /*
       if(theta >= -2e-2 && theta <= 2e-2 && tog == 0u)
       {
@@ -473,16 +505,42 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc)
         tog = 0u;
       }
       */
-      
 
-      /*单相逆变测试代码*/
+      /*补足公式中的相位以及1.8度群延迟*/
+      float theta = PLL_rectify.theta + PI/2 + 0.0314f;
+      if(theta > 2*PI)
+      {
+         theta -= 2.0f * PI;
+      }
+
+      pll_lock_condition =PLL_rectify.voltage_valid && 
+                          (fabsf(PLL_rectify.vq_normalized) < PLL_rectify_vq_normalized_min) &&
+                          (PLL_rectify.omega > PLL_rectify_omega_min) && (PLL_rectify.omega < PLL_rectify_omega_max);
+     
+      /* PLL锁定条件判断 */
+      /*假设正常电压下锁相环在0.2s后稳定
+        不正常电压下0.02s后失锁*/
+      if (pll_lock_condition){ 
+         pll_unlock_count = 0U;
+         if (pll_lock_count < 4000U){pll_lock_count++;}
+         if (pll_lock_count >= 4000U){PLL_stable = 1U;}
+        }
+      else{
+         pll_lock_count = 0U;
+         if (pll_unlock_count < 400U){pll_unlock_count++;}
+         if (pll_unlock_count >= 400U){PLL_stable = 0U;}
+        }
+     
+  /**
+  * @brief  第三部分：单相逆变测试代码，检测spwm是否正常工作
+  */
       /*
       theta_spwm += theta_spwm_step;
       if(theta_spwm > 2*PI)
       {
          theta_spwm -= 2.0f * PI;
       }
-      float v_ref = 1.0f * arm_sin_f32(theta_spwm);
+      float v_ref = spwm_amplitude * arm_sin_f32(theta_spwm);
       spwm_start++;
       if(spwm_start > 5u)
       {
@@ -491,29 +549,14 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc)
       }
      */
 
-    /*假设锁相环在0.2s后稳定*/
-     spwm_update_count++;
-     if(spwm_update_count >= 4000u && PLL_stable == 0)
-     {
-      spwm_update_count = 0u;
-      PLL_stable = 1U; 
-     }
-
-      //串口发送调试
-      tx_divider++;
-      if(tx_divider >= 1000U)
-      {
-          tx_divider = 0U;
-          TX_ready = 1; // 设置串口发送标志位，表示可以发送数据
-      }
-
-     /*闭环操作从此开始*/
-     /*内环20k，外环1k，进行控制调节*/
+    /**
+    * @brief  第四部分：双闭环操作的开始，进行电压环和电流环的控制
+    *         电压环利用PID控制，电流环利用QPR控制，内环20k，外环1k
+    */
      if(PLL_stable == 1U)
      {
-
       PI_outdoor_f++;
-
+      //首次外环
       if(PI_outdoor_time == 0U)
       {
         //第一步：电压环的PID控制
@@ -521,33 +564,52 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc)
         PI_outdoor_time = 1u;
       }
 
+      /*周期性外环控制*/
       if(PI_outdoor_f >= 20u && PI_outdoor_time == 1u)
       {
         PI_outdoor_f = 0u;
       //第一步：电压环的PID控制
         PID_Calc(&pid_controller, voltage_reference, adc_V_value[2]);
       }
-
       //第二步：并行进行角度控制，PFC矫正
-        float angle = Pll_angle_step + theta;        
-        if(angle > 2*PI)
-       {
-         angle -= 2.0f * PI;
-       }
+      float angle = Pll_angle_step + theta;        
+      if(angle > 2*PI)
+      {
+        angle -= 2.0f * PI;
+      }
       //第三步：目标电流的生成
-        float I_target = arm_sin_f32(angle) * pid_controller.output;
+      float I_target = arm_sin_f32(angle) * pid_controller.output;
       //第四步：差值进行QPR控制
-        float I_error = I_target - adc_I_value[1];
-        QPRController_Update(&qpr_controller, I_error);
+      float I_error = I_target - adc_I_value[1];
+      QPRController_Update(&qpr_controller, I_error);
       //第五步：根据PR控制器的输出更新SPWM
-        float v_ref = qpr_controller.output;
-        if(PFC_PWM_Update(&pfc_spwm, v_ref, adc_V_value[2]) != true)
-        {if(PFC_SPWM_Stop(&pfc_spwm) != true)
-          {
-            Error_Handler();//硬件中断
-          }
-        };
+      float v_ref = qpr_controller.output;
+      if(PFC_PWM_Update(&pfc_spwm, v_ref, adc_V_value[2]) != true)
+       {if(PFC_SPWM_Stop(&pfc_spwm) != true)
+        {
+          Error_Handler();//硬件中断
+        }
+       };
      }
+     //锁相环失控，断掉所有的spwm
+     else{
+        if(PFC_SPWM_Stop(&pfc_spwm) != true)
+        {
+          Error_Handler();//硬件中断
+        }
+
+     }
+
+    /**
+    * @brief  第五部分：串口发送调试，设置发送标志位
+    *         每1000次循环设置一次发送标志位，即0.05s发送一次
+    */
+      tx_divider++;
+      if(tx_divider >= 1000U)
+      {
+          tx_divider = 0U;
+          TX_ready = 1; // 设置串口发送标志位，表示可以发送数据
+      }
   }
 }
 
